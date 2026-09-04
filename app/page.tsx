@@ -6,13 +6,21 @@ import { Check, Clock3, RotateCcw, UserCheck, UserX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type AttendanceStatus = "present" | "absent" | "late" | "unmarked";
-
+type MarkedAttendance = Record<number, AttendanceStatus>;
 type Student = {
   id: number;
   name: string;
   roll: string;
   className: string;
 };
+
+const STORAGE_KEY_PREFIX = "attendance-manager:daily:";
+const validStatuses = new Set<AttendanceStatus>([
+  "present",
+  "absent",
+  "late",
+  "unmarked",
+]);
 
 const students: Student[] = [
   { id: 1, name: "Aarav Patil", roll: "01", className: "12-A" },
@@ -31,7 +39,8 @@ const statusConfig: Record<
 > = {
   present: {
     label: "Present",
-    className: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+    className:
+      "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
     icon: Check,
   },
   absent: {
@@ -41,10 +50,58 @@ const statusConfig: Record<
   },
   late: {
     label: "Late",
-    className: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+    className:
+      "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
     icon: Clock3,
   },
 };
+
+function createEmptyAttendance(): MarkedAttendance {
+  return Object.fromEntries(
+    students.map((student) => [student.id, "unmarked"])
+  );
+}
+
+function getLocalDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getStorageKey(date: Date) {
+  return `${STORAGE_KEY_PREFIX}${getLocalDateKey(date)}`;
+}
+
+function readStoredAttendance(date: Date): MarkedAttendance {
+  const empty = createEmptyAttendance();
+
+  try {
+    const raw = window.localStorage.getItem(getStorageKey(date));
+    if (!raw) return empty;
+
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return empty;
+    }
+
+    const stored = parsed as Record<string, unknown>;
+
+    for (const student of students) {
+      const value = stored[String(student.id)];
+      if (
+        typeof value === "string" &&
+        validStatuses.has(value as AttendanceStatus)
+      ) {
+        empty[student.id] = value as AttendanceStatus;
+      }
+    }
+  } catch {
+    return empty;
+  }
+
+  return empty;
+}
 
 function formatDate(date: Date) {
   return new Intl.DateTimeFormat("en-IN", {
@@ -56,14 +113,31 @@ function formatDate(date: Date) {
 }
 
 export default function Home() {
-  const [attendance, setAttendance] = useState<Record<number, AttendanceStatus>>(
-    () => Object.fromEntries(students.map((student) => [student.id, "unmarked"]))
+  const [attendance, setAttendance] = useState<MarkedAttendance>(() =>
+    createEmptyAttendance()
   );
   const [today, setToday] = useState("");
+  const [storageReady, setStorageReady] = useState(false);
 
   useEffect(() => {
-    setToday(formatDate(new Date()));
+    const now = new Date();
+    setToday(formatDate(now));
+    setAttendance(readStoredAttendance(now));
+    setStorageReady(true);
   }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+
+    try {
+      window.localStorage.setItem(
+        getStorageKey(new Date()),
+        JSON.stringify(attendance)
+      );
+    } catch {
+      // Persistence is best-effort; attendance still works in memory.
+    }
+  }, [attendance, storageReady]);
 
   const summary = useMemo(() => {
     const values = Object.values(attendance);
@@ -77,7 +151,10 @@ export default function Home() {
     };
   }, [attendance]);
 
-  const setStatus = (studentId: number, status: Exclude<AttendanceStatus, "unmarked">) => {
+  const setStatus = (
+    studentId: number,
+    status: Exclude<AttendanceStatus, "unmarked">
+  ) => {
     setAttendance((current) => ({ ...current, [studentId]: status }));
   };
 
@@ -88,12 +165,12 @@ export default function Home() {
   };
 
   const resetAttendance = () => {
-    setAttendance(
-      Object.fromEntries(students.map((student) => [student.id, "unmarked"]))
-    );
+    setAttendance(createEmptyAttendance());
   };
 
-  const completion = Math.round(((summary.total - summary.unmarked) / summary.total) * 100);
+  const completion = Math.round(
+    ((summary.total - summary.unmarked) / summary.total) * 100
+  );
 
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-10">
@@ -124,10 +201,26 @@ export default function Home() {
         </header>
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <SummaryCard label="Total students" value={summary.total} detail="Students on roster" />
-          <SummaryCard label="Present" value={summary.present} detail={`${completion}% attendance marked`} />
-          <SummaryCard label="Absent" value={summary.absent} detail="Requires follow-up" />
-          <SummaryCard label="Late" value={summary.late} detail={`${summary.unmarked} still unmarked`} />
+          <SummaryCard
+            label="Total students"
+            value={summary.total}
+            detail="Students on roster"
+          />
+          <SummaryCard
+            label="Present"
+            value={summary.present}
+            detail={`${completion}% attendance marked`}
+          />
+          <SummaryCard
+            label="Absent"
+            value={summary.absent}
+            detail="Requires follow-up"
+          />
+          <SummaryCard
+            label="Late"
+            value={summary.late}
+            detail={`${summary.unmarked} still unmarked`}
+          />
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -157,8 +250,12 @@ export default function Home() {
                       {student.roll}
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate font-semibold text-slate-900">{student.name}</p>
-                      <p className="mt-1 text-sm text-slate-500">Class {student.className}</p>
+                      <p className="truncate font-semibold text-slate-900">
+                        {student.name}
+                      </p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Class {student.className}
+                      </p>
                     </div>
                   </div>
 
@@ -173,10 +270,15 @@ export default function Home() {
                           type="button"
                           aria-pressed={selected}
                           onClick={() =>
-                            setStatus(student.id, key as Exclude<AttendanceStatus, "unmarked">)
+                            setStatus(
+                              student.id,
+                              key as Exclude<AttendanceStatus, "unmarked">
+                            )
                           }
                           className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-sm font-medium transition ${config.className} ${
-                            selected ? "ring-2 ring-slate-900/10 ring-offset-1" : "opacity-70 hover:opacity-100"
+                            selected
+                              ? "ring-2 ring-slate-900/10 ring-offset-1"
+                              : "opacity-70 hover:opacity-100"
                           }`}
                         >
                           <Icon />
@@ -195,7 +297,15 @@ export default function Home() {
   );
 }
 
-function SummaryCard({ label, value, detail }: { label: string; value: number; detail: string }) {
+function SummaryCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: number;
+  detail: string;
+}) {
   return (
     <article className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <p className="text-sm font-medium text-slate-500">{label}</p>
