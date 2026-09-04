@@ -89,7 +89,10 @@ function readStoredAttendance(date: Date): MarkedAttendance {
 
     for (const student of students) {
       const value = stored[String(student.id)];
-      if (typeof value === "string" && validStatuses.has(value as AttendanceStatus)) {
+      if (
+        typeof value === "string" &&
+        validStatuses.has(value as AttendanceStatus)
+      ) {
         empty[student.id] = value as AttendanceStatus;
       }
     }
@@ -269,7 +272,8 @@ export default function Home() {
                           onClick={() =>
                             setStatus(
                               student.id,
-                              key as Exclude<AttendanceStatus, "unmarked">")
+                              key as Exclude<AttendanceStatus, "unmarked">
+                            )
                           }
                           className={`inline-flex h-9 items-center gap-2 rounded-full border px-3 text-sm font-medium transition ${config.className} ${
                             selected
